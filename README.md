@@ -18,10 +18,10 @@ Skills para o fluxo de desenvolvimento Delphi:
 
 ## Como instalar
 
-### A partir do GitHub (apos publicar este repositorio)
+### A partir do GitHub
 
 ```
-/plugin marketplace add <org-ou-usuario>/quantum-claude-plugins
+/plugin marketplace add gabriel-guarda/quantum-claude-plugins
 /plugin install delphi-tools@quantum-tools
 ```
 
