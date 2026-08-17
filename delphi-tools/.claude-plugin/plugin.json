@@ -1,0 +1,6 @@
+{
+  "name": "delphi-tools",
+  "description": "Skills para desenvolvimento Delphi: encoding UTF-8 com BOM do diff e limpeza de comentarios adicionados",
+  "version": "1.0.0",
+  "author": { "name": "Equipe Quantum" }
+}

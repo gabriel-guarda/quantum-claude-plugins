@@ -1,0 +1,13 @@
+{
+  "name": "quantum-tools",
+  "description": "Plugins do Claude Code da equipe Quantum: skills para o fluxo de desenvolvimento Delphi",
+  "owner": { "name": "Equipe Quantum" },
+  "plugins": [
+    {
+      "name": "delphi-tools",
+      "source": "./delphi-tools",
+      "description": "Skills para projetos Delphi: normalizacao de encoding para UTF-8 com BOM e remocao de comentarios adicionados no diff",
+      "version": "1.0.0"
+    }
+  ]
+}
