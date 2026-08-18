@@ -8,6 +8,8 @@
     Coleta os arquivos que entrariam no proximo commit:
       - alteracoes rastreadas vs HEAD (staged + working tree)
       - arquivos novos nao rastreados (respeitando .gitignore)
+    Ou, com -Path, analisa apenas os arquivos/diretorios informados
+    (independente do git).
     Para cada arquivo de texto, detecta a codificacao atual, le o conteudo e
     regrava como UTF-8 com BOM. Seguranca:
       - Arquivos binarios (extensao conhecida, byte nulo ou muitos bytes de
@@ -20,49 +22,94 @@
       - Arquivos em UTF-8 valido sao varridos em busca de mojibake (acentos
         quebrados tipo C3-xx) e apenas AVISADOS, nunca alterados.
 
+.PARAMETER Path
+    Um ou mais arquivos (aceita curingas e diretorios, estes varridos
+    recursivamente) para analisar em vez do diff do git. Com -Path nao e
+    necessario estar em um repositorio git.
+
 .PARAMETER WhatIf
-    Apenas mostra o que seria convertido, sem gravar nada.
+    Apenas mostra o que seria convertido, sem gravar nada. Combinado com
+    -Path funciona como verificador de encoding de arquivos especificos.
 
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File Fix-DiffEncoding.ps1
     powershell -NoProfile -ExecutionPolicy Bypass -File Fix-DiffEncoding.ps1 -WhatIf
+    powershell -NoProfile -ExecutionPolicy Bypass -File Fix-DiffEncoding.ps1 -Path "UCadProduto.pas" -WhatIf
+    powershell -NoProfile -ExecutionPolicy Bypass -File Fix-DiffEncoding.ps1 -Path "Dao\*.pas","Controller\"
 #>
 [CmdletBinding()]
 param(
-    [switch]$WhatIf
+    [Parameter(Position = 0)]
+    [string[]]$Path,
+    [switch]$WhatIf,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$PathResto
 )
 
-# --- Verifica repositorio git --------------------------------------------------
-$null = git rev-parse --is-inside-work-tree 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERRO: diretorio atual nao e um repositorio git (ou git nao encontrado)." -ForegroundColor Red
-    exit 1
-}
+# Via "powershell -File" nao existem arrays: aceita multiplos caminhos como
+# argumentos soltos (coletados em $PathResto) ou separados por , ou ;
+$Path = @(@($Path) + @($PathResto) |
+    Where-Object { $_ } |
+    ForEach-Object { $_ -split '[,;]' } |
+    ForEach-Object { $_.Trim() } |
+    Where-Object { $_ })
 
-$root = (git rev-parse --show-toplevel).Trim()
+$explicitMode = ($Path.Count -gt 0)
+$files    = New-Object 'System.Collections.Generic.HashSet[string]'
+$notFound = @()
+$root     = $null
 
-# --- Coleta arquivos candidatos ------------------------------------------------
-$files = New-Object 'System.Collections.Generic.HashSet[string]'
+if ($explicitMode) {
+    # --- Modo -Path: analisa os arquivos informados (nao exige git) ------------
+    foreach ($p in $Path) {
+        $resolved = @()
+        try { $resolved = @(Resolve-Path -Path $p -ErrorAction Stop) } catch { $notFound += $p; continue }
+        foreach ($r in $resolved) {
+            if (Test-Path -LiteralPath $r.Path -PathType Container) {
+                Get-ChildItem -LiteralPath $r.Path -Recurse -File | ForEach-Object { [void]$files.Add($_.FullName) }
+            } else {
+                [void]$files.Add($r.Path)
+            }
+        }
+    }
 
-git rev-parse --verify HEAD *> $null
-$hasHead = ($LASTEXITCODE -eq 0)
-
-if ($hasHead) {
-    git -c core.quotepath=false diff --name-only HEAD |
-        ForEach-Object { if ($_ -and $_.Trim()) { [void]$files.Add($_.Trim()) } }
+    if ($files.Count -eq 0) {
+        Write-Host "Nenhum arquivo encontrado para os caminhos informados." -ForegroundColor Yellow
+        $notFound | ForEach-Object { Write-Host ("  - nao encontrado: {0}" -f $_) -ForegroundColor Yellow }
+        exit 1
+    }
 } else {
-    # repositorio sem nenhum commit ainda: usa o que esta no index
-    git -c core.quotepath=false diff --cached --name-only |
+    # --- Verifica repositorio git ----------------------------------------------
+    $null = git rev-parse --is-inside-work-tree 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERRO: diretorio atual nao e um repositorio git (ou git nao encontrado)." -ForegroundColor Red
+        Write-Host "Dica: use -Path <arquivo> para analisar arquivos especificos sem git." -ForegroundColor Yellow
+        exit 1
+    }
+
+    $root = (git rev-parse --show-toplevel).Trim()
+
+    # --- Coleta arquivos candidatos --------------------------------------------
+    git rev-parse --verify HEAD *> $null
+    $hasHead = ($LASTEXITCODE -eq 0)
+
+    if ($hasHead) {
+        git -c core.quotepath=false diff --name-only HEAD |
+            ForEach-Object { if ($_ -and $_.Trim()) { [void]$files.Add($_.Trim()) } }
+    } else {
+        # repositorio sem nenhum commit ainda: usa o que esta no index
+        git -c core.quotepath=false diff --cached --name-only |
+            ForEach-Object { if ($_ -and $_.Trim()) { [void]$files.Add($_.Trim()) } }
+    }
+
+    # arquivos novos nao rastreados (respeita .gitignore)
+    git -c core.quotepath=false ls-files --others --exclude-standard |
         ForEach-Object { if ($_ -and $_.Trim()) { [void]$files.Add($_.Trim()) } }
-}
 
-# arquivos novos nao rastreados (respeita .gitignore)
-git -c core.quotepath=false ls-files --others --exclude-standard |
-    ForEach-Object { if ($_ -and $_.Trim()) { [void]$files.Add($_.Trim()) } }
-
-if ($files.Count -eq 0) {
-    Write-Host "Nenhum arquivo alterado ou novo encontrado no diff." -ForegroundColor Yellow
-    exit 0
+    if ($files.Count -eq 0) {
+        Write-Host "Nenhum arquivo alterado ou novo encontrado no diff." -ForegroundColor Yellow
+        exit 0
+    }
 }
 
 # --- Encodings -----------------------------------------------------------------
@@ -129,7 +176,7 @@ function Get-MojibakeCount {
 }
 
 $converted     = @()
-$alreadyOk     = 0
+$alreadyOk     = @()
 $skippedBinary = @()
 $ambiguous     = @()
 $mojibake      = @()
@@ -137,19 +184,24 @@ $missing       = 0
 $errors        = @()
 
 foreach ($rel in $files) {
-    $path = Join-Path $root $rel
+    $path = if ($explicitMode) { $rel } else { Join-Path $root $rel }
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { $missing++; continue }
 
     try {
         $bytes = [System.IO.File]::ReadAllBytes($path)
-        if ($bytes.Length -eq 0) { $alreadyOk++; continue }
+        if ($bytes.Length -eq 0) { $alreadyOk += $rel; continue }
+
+        # UTF-16 tem bytes nulos e seria confundido com binario: detecta o BOM
+        # antes da heuristica de conteudo (a checagem por extensao continua valendo).
+        $utf16Bom = ($bytes.Length -ge 2 -and (($bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) -or ($bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF)))
+        $extBin = $binExt -contains ([System.IO.Path]::GetExtension($path).ToLowerInvariant())
 
         # Deteccao de binario (extensao conhecida, byte nulo ou muitos bytes de controle)
-        if (Test-IsBinary -Bytes $bytes -Path $path) { $skippedBinary += $rel; continue }
+        if ($extBin -or (-not $utf16Bom -and (Test-IsBinary -Bytes $bytes -Path $path))) { $skippedBinary += $rel; continue }
 
         # Ja esta em UTF-8 com BOM? -> nao reescreve, mas verifica mojibake.
         if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-            $alreadyOk++
+            $alreadyOk += $rel
             $mj = Get-MojibakeCount ([System.Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3))
             if ($mj -gt 0) { $mojibake += [pscustomobject]@{ Arquivo = $rel; Ocorrencias = $mj } }
             continue
@@ -207,7 +259,11 @@ $acao = if ($WhatIf) { "SERIAM convertidos (modo -WhatIf, nada gravado)" } else 
 
 Write-Host ""
 Write-Host "=== Fix-DiffEncoding ===" -ForegroundColor Cyan
-Write-Host ("Repositorio : {0}" -f $root)
+if ($explicitMode) {
+    Write-Host "Modo        : arquivos informados (-Path)"
+} else {
+    Write-Host ("Repositorio : {0}" -f $root)
+}
 Write-Host ("Candidatos  : {0}" -f $files.Count)
 Write-Host ""
 
@@ -218,7 +274,10 @@ if ($converted.Count -gt 0) {
     Write-Host "Nenhum arquivo precisou de conversao." -ForegroundColor Green
 }
 
-if ($alreadyOk -gt 0)            { Write-Host ("Ja em UTF-8 com BOM : {0}" -f $alreadyOk) }
+if ($alreadyOk.Count -gt 0) {
+    Write-Host ("Ja em UTF-8 com BOM : {0}" -f $alreadyOk.Count)
+    if ($explicitMode) { $alreadyOk | ForEach-Object { Write-Host ("  - {0}" -f $_) } }
+}
 
 if ($skippedBinary.Count -gt 0)  {
     Write-Host ("Pulados (binarios)  : {0}" -f $skippedBinary.Count) -ForegroundColor Yellow
@@ -237,6 +296,11 @@ if ($mojibake.Count -gt 0) {
 }
 
 if ($missing -gt 0)              { Write-Host ("Ignorados (removidos/inexistentes): {0}" -f $missing) }
+
+if ($notFound.Count -gt 0) {
+    Write-Host ("Caminhos nao encontrados (-Path): {0}" -f $notFound.Count) -ForegroundColor Yellow
+    $notFound | ForEach-Object { Write-Host ("  - {0}" -f $_) -ForegroundColor Yellow }
+}
 
 if ($errors.Count -gt 0) {
     Write-Host ("ERROS: {0}" -f $errors.Count) -ForegroundColor Red

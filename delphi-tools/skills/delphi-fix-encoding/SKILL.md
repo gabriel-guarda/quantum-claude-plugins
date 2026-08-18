@@ -1,18 +1,32 @@
----
+﻿---
 name: delphi-fix-encoding
-description: Normaliza o encoding de TODOS os arquivos alterados e novos (nao rastreados) do repositorio git para UTF-8 com BOM, detectando a origem (ANSI/Windows-1252, UTF-8 sem BOM, UTF-16) para preservar acentos. Use antes de dar commit em projetos Delphi quando ha problemas de encoding, caracteres acentuados quebrados, ou para padronizar os arquivos do diff.
+description: Normaliza o encoding de TODOS os arquivos alterados e novos (nao rastreados) do repositorio git para UTF-8 com BOM, detectando a origem (ANSI/Windows-1252, UTF-8 sem BOM, UTF-16) para preservar acentos. Com -Path, analisa/converte arquivos ou diretorios especificos (ex.: uma unit) em vez do diff; com -WhatIf apenas verifica sem alterar. Use antes de dar commit em projetos Delphi quando ha problemas de encoding, caracteres acentuados quebrados, para padronizar os arquivos do diff, ou para verificar o encoding de uma unit especifica.
 ---
 
 # Ajustar encoding do diff (Delphi) -> UTF-8 com BOM
 
 Esta skill converte para **UTF-8 com BOM** todos os arquivos que entrariam no
 proximo commit (alteracoes rastreadas vs HEAD + arquivos novos nao rastreados),
-detectando a codificacao de origem para nao quebrar os acentos.
+detectando a codificacao de origem para nao quebrar os acentos. Com `-Path`,
+opera apenas sobre arquivos/diretorios especificos em vez do diff.
+
+## Escolha do modo
+
+- **Diff do git (padrao):** sem `-Path`, processa todos os arquivos alterados e
+  novos do repositorio. Exige estar em um repo git.
+- **Arquivos especificos (`-Path`):** o usuario indicou uma unit ou pasta
+  especifica. Aceita varios caminhos, curingas (`Dao\*.pas`) e diretorios
+  (varridos recursivamente). Nao exige git.
+- **So verificar (sem alterar):** adicione `-WhatIf` em qualquer modo. A saida
+  informa o encoding detectado de cada arquivo (`[origem: ...]`, `Ja em UTF-8
+  com BOM`, mojibake etc.) sem gravar nada.
 
 ## Passos
 
-1. **Confirme o repositorio.** A skill opera sobre o repositorio git do diretorio
-   de trabalho atual. Se nao estiver em um repo git, avise o usuario.
+1. **Confirme o escopo.** Se o usuario citou arquivo(s) ou pasta especifica, use
+   `-Path`; caso contrario, opere no diff (e confirme que esta em um repo git —
+   se nao estiver, avise o usuario). Se o pedido for so "verificar/conferir o
+   encoding", inclua `-WhatIf`.
 
 2. **(Opcional) Pre-visualize.** Se o usuario quiser ver o que sera alterado antes,
    rode com `-WhatIf`:
@@ -21,16 +35,24 @@ detectando a codificacao de origem para nao quebrar os acentos.
    powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/skills/delphi-fix-encoding/Fix-DiffEncoding.ps1" -WhatIf
    ```
 
-3. **Execute a conversao:**
+3. **Execute:**
 
    ```
    powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/skills/delphi-fix-encoding/Fix-DiffEncoding.ps1"
    ```
 
+   Para uma unit especifica (verificacao e conversao, respectivamente):
+
+   ```
+   powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/skills/delphi-fix-encoding/Fix-DiffEncoding.ps1" -Path "UCadProduto.pas" -WhatIf
+   powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/skills/delphi-fix-encoding/Fix-DiffEncoding.ps1" -Path "UCadProduto.pas"
+   ```
+
 4. **Reporte o resultado** ao usuario com base na saida do script: quantos foram
    convertidos (e de qual encoding de origem), quantos ja estavam OK e quais foram
-   pulados por serem binarios. **Nao** faca o commit automaticamente — a skill so
-   ajusta o encoding; o commit fica a cargo do usuario.
+   pulados por serem binarios. No modo `-WhatIf`, reporte o encoding detectado de
+   cada arquivo sem alterar nada. **Nao** faca o commit automaticamente — a skill
+   so ajusta o encoding; o commit fica a cargo do usuario.
 
 ## Como o script decide a codificacao de origem
 
