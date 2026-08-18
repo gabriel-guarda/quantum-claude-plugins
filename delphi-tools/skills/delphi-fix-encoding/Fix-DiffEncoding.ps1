@@ -15,6 +15,11 @@
       - Arquivos binarios (extensao conhecida, byte nulo ou muitos bytes de
         controle) sao pulados.
       - Arquivos ja em UTF-8 com BOM nao sao tocados.
+      - Arquivos 100% ASCII (sem nenhum acento) NAO sao tocados: nesse caso
+        ANSI e UTF-8 sao identicos byte a byte, nao ha encoding quebrado e
+        inserir o BOM so sujaria o diff. Use -BomEmAscii para forcar.
+      - O conteudo e preservado integralmente: espacos, indentacao e quebras
+        de linha (CRLF) nao sao alterados, e cada gravacao e reconferida.
       - O fallback para Windows-1252 so e aplicado quando o arquivo NAO tem
         nenhuma sequencia UTF-8 valida (ANSI puro). Se houver sequencias UTF-8
         validas E bytes invalidos (arquivo corrompido/misto), o arquivo NAO e
@@ -26,6 +31,11 @@
     Um ou mais arquivos (aceita curingas e diretorios, estes varridos
     recursivamente) para analisar em vez do diff do git. Com -Path nao e
     necessario estar em um repositorio git.
+
+.PARAMETER BomEmAscii
+    Tambem insere o BOM em arquivos 100% ASCII (sem acento algum). Fora dessa
+    opcao esses arquivos sao deixados intactos, para o diff conter apenas o que
+    realmente estava com encoding quebrado.
 
 .PARAMETER WhatIf
     Apenas mostra o que seria convertido, sem gravar nada. Combinado com
@@ -42,6 +52,7 @@ param(
     [Parameter(Position = 0)]
     [string[]]$Path,
     [switch]$WhatIf,
+    [switch]$BomEmAscii,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$PathResto
 )
@@ -145,6 +156,16 @@ function Test-IsBinary {
     return (($control / $scan) -gt 0.10)   # >10% de controle => provavelmente binario
 }
 
+# Arquivo 100% ASCII (nenhum byte >= 0x80): ANSI e UTF-8 sao byte-a-byte
+# identicos, nao existe acento para quebrar. Nao ha o que corrigir.
+function Test-IsPureAscii {
+    param([byte[]]$Bytes)
+    for ($i = 0; $i -lt $Bytes.Length; $i++) {
+        if ($Bytes[$i] -ge 0x80) { return $false }
+    }
+    return $true
+}
+
 # Conta sequencias UTF-8 multibyte validas vs bytes altos invalidos.
 # Distingue ANSI puro (0 validas) de UTF-8 corrompido/misto (>0 validas).
 function Get-Utf8MultibyteStats {
@@ -177,6 +198,7 @@ function Get-MojibakeCount {
 
 $converted     = @()
 $alreadyOk     = @()
+$asciiOk       = @()
 $skippedBinary = @()
 $ambiguous     = @()
 $mojibake      = @()
@@ -204,6 +226,14 @@ foreach ($rel in $files) {
             $alreadyOk += $rel
             $mj = Get-MojibakeCount ([System.Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3))
             if ($mj -gt 0) { $mojibake += [pscustomobject]@{ Arquivo = $rel; Ocorrencias = $mj } }
+            continue
+        }
+
+        # Sem BOM e 100% ASCII: o encoding NAO esta quebrado (ANSI e UTF-8 sao
+        # identicos aqui). Reescrever so para inserir o BOM sujaria o diff sem
+        # corrigir nada. Use -BomEmAscii para forcar a normalizacao completa.
+        if (-not $BomEmAscii -and -not $utf16Bom -and (Test-IsPureAscii $bytes)) {
+            $asciiOk += $rel
             continue
         }
 
@@ -246,6 +276,17 @@ foreach ($rel in $files) {
 
         if (-not $WhatIf) {
             [System.IO.File]::WriteAllText($path, $text, $utf8Bom)
+
+            # Garantia: rele o arquivo e confere que SO a codificacao mudou.
+            # Espacos, indentacao e quebras de linha (CRLF) tem que bater byte
+            # a byte apos decodificar. Se divergir, restaura o original.
+            $novoBytes = [System.IO.File]::ReadAllBytes($path)
+            $novoTexto = $utf8Strict.GetString($novoBytes, 3, $novoBytes.Length - 3)
+            if (-not ($novoTexto -ceq $text)) {
+                [System.IO.File]::WriteAllBytes($path, $bytes)
+                $errors += [pscustomobject]@{ Arquivo = $rel; Erro = 'verificacao pos-gravacao falhou - arquivo restaurado ao original' }
+                continue
+            }
         }
         $converted += [pscustomobject]@{ Arquivo = $rel; Origem = $sourceEnc }
     }
@@ -277,6 +318,11 @@ if ($converted.Count -gt 0) {
 if ($alreadyOk.Count -gt 0) {
     Write-Host ("Ja em UTF-8 com BOM : {0}" -f $alreadyOk.Count)
     if ($explicitMode) { $alreadyOk | ForEach-Object { Write-Host ("  - {0}" -f $_) } }
+}
+
+if ($asciiOk.Count -gt 0) {
+    Write-Host ("ASCII puro (sem acento, nada quebrado - nao tocado): {0}" -f $asciiOk.Count)
+    if ($explicitMode) { $asciiOk | ForEach-Object { Write-Host ("  - {0}" -f $_) } }
 }
 
 if ($skippedBinary.Count -gt 0)  {

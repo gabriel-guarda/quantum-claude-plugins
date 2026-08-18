@@ -10,7 +10,8 @@ Skills para o fluxo de desenvolvimento Delphi:
 
 - **delphi-fix-encoding** — normaliza o encoding dos arquivos alterados/novos do
   repositorio git para UTF-8 com BOM, detectando a origem (ANSI/Windows-1252,
-  UTF-8 sem BOM, UTF-16) para preservar os acentos. Use antes de commitar.
+  UTF-8 sem BOM, UTF-16) para preservar os acentos. Toca **somente** nos arquivos
+  que estao de fato quebrados, para o diff nao inchar. Use antes de commitar.
   Tambem verifica/converte arquivos ou pastas especificas via `-Path`.
 - **delphi-remove-comments** — remove os comentarios (`//` e `{ }`) e linhas em
   branco ADICIONADOS no diff de fontes Delphi (.pas/.dpr/.dpk/.inc), preservando
@@ -64,12 +65,32 @@ powershell -NoProfile -ExecutionPolicy Bypass -File <plugin>\skills\delphi-fix-e
 powershell -NoProfile -ExecutionPolicy Bypass -File ...\Fix-DiffEncoding.ps1 -WhatIf                                      # diff, so verificar
 powershell -NoProfile -ExecutionPolicy Bypass -File ...\Fix-DiffEncoding.ps1 -Path "UCadProduto.pas" -WhatIf              # unit especifica, so verificar
 powershell -NoProfile -ExecutionPolicy Bypass -File ...\Fix-DiffEncoding.ps1 -Path "Dao\*.pas" "Controller\"              # curingas e pastas (recursivo)
+powershell -NoProfile -ExecutionPolicy Bypass -File ...\Fix-DiffEncoding.ps1 -BomEmAscii                                   # forca BOM ate em arquivos sem acento
 ```
 
 Detalhes do `-Path`: aceita varios caminhos (soltos ou separados por `,`/`;`),
 curingas e diretorios (varridos recursivamente); nao exige repositorio git.
-Arquivos ja em UTF-8 com BOM nunca sao reescritos; binarios sao pulados;
-UTF-8 corrompido/misto e mojibake sao apenas avisados para revisao manual.
+
+#### O que NAO e tocado
+
+O objetivo e que o diff contenha apenas o que realmente estava com encoding
+quebrado:
+
+- Arquivos **ja em UTF-8 com BOM** nunca sao reescritos.
+- Arquivos **100% ASCII** (nenhum acento) sao deixados intactos: nesse caso ANSI e
+  UTF-8 sao identicos byte a byte, nao ha nada quebrado, e inserir o BOM so criaria
+  ruido no diff. Passe `-BomEmAscii` se quiser forcar o BOM em todos.
+- **Binarios** sao pulados (extensao conhecida, byte nulo ou muitos bytes de controle).
+- **UTF-8 corrompido/misto** e **mojibake** sao apenas avisados para revisao manual,
+  nunca convertidos automaticamente.
+
+#### Preservacao do conteudo
+
+So a codificacao muda. Espacos, indentacao, linhas em branco e quebras de linha
+(CRLF) ficam intactos — `git diff -w` retorna o mesmo que o diff normal. Depois de
+gravar, o script rele o arquivo e confere que o texto decodificado bate exatamente
+com o original; se divergir, restaura os bytes originais e reporta erro. Na pratica
+as unicas linhas que mudam sao as que contem acentos, mais o BOM na linha 1.
 
 ### delphi-remove-comments
 
